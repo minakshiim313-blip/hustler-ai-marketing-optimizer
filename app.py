@@ -135,12 +135,12 @@ budget = st.sidebar.number_input(
     step=5000
 )
 
-week_to_opt = st.sidebar.number_input(
-    "Week to optimize for (future week index)",
-    min_value=int(df["week"].max()) + 1,
-    max_value=int(df["week"].max()) + 10,
-    value=int(df["week"].max()) + 1,
-    step=1
+# How many future weeks is this plan for?
+weeks_horizon = st.sidebar.selectbox(
+    "Plan for how many weeks?",
+    [1, 2, 4],
+    index=0,
+    format_func=lambda x: f"{x} week" if x == 1 else f"{x} weeks"
 )
 
 seasonality_label = st.sidebar.selectbox(
@@ -204,20 +204,31 @@ if run_opt:
 
     st.subheader("AI-Optimized Budget Allocation")
 
-    opt_alloc, opt_conv_total = optimize_budget(
-        budget, week_to_opt, seasonality_factor
+    # Internal "next week" index (user does not see this)
+    internal_week = df["week"].max() + 1
+
+    # optimized allocation for one week
+    opt_alloc, opt_conv_total_one_week = optimize_budget(
+        budget, internal_week, seasonality_factor
     )
 
+    # baseline allocation scaled to same budget
     baseline_spend_scaled = {ch: budget * baseline_mix[ch] for ch in channels}
-    base_conv_dict = predict_conversions_by_channel(
-        baseline_spend_scaled, week_to_opt, seasonality_factor
+    base_conv_dict_one_week = predict_conversions_by_channel(
+        baseline_spend_scaled, internal_week, seasonality_factor
     )
-    opt_conv_dict = predict_conversions_by_channel(
-        opt_alloc, week_to_opt, seasonality_factor
+    opt_conv_dict_one_week = predict_conversions_by_channel(
+        opt_alloc, internal_week, seasonality_factor
     )
 
-    base_total_conv = sum(base_conv_dict.values())
-    uplift_pct = (opt_conv_total - base_total_conv) / base_total_conv * 100 if base_total_conv > 0 else 0.0
+    # scale by number of weeks in horizon (assuming same allocation each week)
+    base_total_conv = sum(base_conv_dict_one_week.values()) * weeks_horizon
+    opt_total_conv = opt_conv_total_one_week * weeks_horizon
+
+    uplift_pct = (
+        (opt_total_conv - base_total_conv) / base_total_conv * 100
+        if base_total_conv > 0 else 0.0
+    )
 
     rows = []
     for ch in channels:
@@ -225,16 +236,19 @@ if run_opt:
             "channel": ch,
             "baseline_spend_inr": round(baseline_spend_scaled[ch], 2),
             "optimized_spend_inr": round(opt_alloc[ch], 2),
-            "baseline_conversions": round(base_conv_dict[ch], 1),
-            "optimized_conversions": round(opt_conv_dict[ch], 1)
+            "baseline_conversions_per_week": round(base_conv_dict_one_week[ch], 1),
+            "optimized_conversions_per_week": round(opt_conv_dict_one_week[ch], 1),
         })
 
     compare_df = pd.DataFrame(rows)
     compare_df["delta_spend_inr"] = compare_df["optimized_spend_inr"] - compare_df["baseline_spend_inr"]
-    compare_df["delta_conversions"] = compare_df["optimized_conversions"] - compare_df["baseline_conversions"]
+    compare_df["delta_conversions_per_week"] = (
+        compare_df["optimized_conversions_per_week"] - compare_df["baseline_conversions_per_week"]
+    )
 
-    st.write(f"**Predicted baseline conversions:** {base_total_conv:.1f}")
-    st.write(f"**Predicted optimized conversions:** {opt_conv_total:.1f}")
+    st.write(f"**Planning horizon:** {weeks_horizon} week(s)")
+    st.write(f"**Predicted baseline conversions over horizon:** {base_total_conv:.1f}")
+    st.write(f"**Predicted optimized conversions over horizon:** {opt_total_conv:.1f}")
     st.write(f"**Expected uplift:** {uplift_pct:.1f}%")
 
     st.dataframe(
@@ -242,9 +256,9 @@ if run_opt:
             "baseline_spend_inr": "₹{:,.0f}",
             "optimized_spend_inr": "₹{:,.0f}",
             "delta_spend_inr": "₹{:+,.0f}",
-            "baseline_conversions": "{:.1f}",
-            "optimized_conversions": "{:.1f}",
-            "delta_conversions": "{:+.1f}"
+            "baseline_conversions_per_week": "{:.1f}",
+            "optimized_conversions_per_week": "{:.1f}",
+            "delta_conversions_per_week": "{:+.1f}"
         })
     )
 
@@ -276,3 +290,4 @@ if run_opt:
 
 else:
     st.info("Set your budget and click 'Run AI Optimization' in the sidebar.")
+
