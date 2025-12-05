@@ -78,6 +78,7 @@ def predict_total_conversions(spend_dict, week, seasonality_factor=1.0):
         total += max(pred, 0)
     return total
 
+
 def predict_conversions_by_channel(spend_dict, week, seasonality_factor=1.0):
     conv_dict = {}
     for ch in channels:
@@ -93,15 +94,16 @@ def predict_conversions_by_channel(spend_dict, week, seasonality_factor=1.0):
 # 4. BASELINE MIX FROM HISTORICAL DATA
 # ============================================
 
+# use last 4 weeks as "current plan"
 recent_weeks = df["week"].max() - 3
 df_recent = df[df["week"] >= recent_weeks]
 
-baseline_spend = df_recent.groupby("channel")["spend_inr"].mean().to_dict()
-baseline_total_budget = sum(baseline_spend.values())
+baseline_spend_hist = df_recent.groupby("channel")["spend_inr"].mean().to_dict()
+baseline_total_budget_hist = sum(baseline_spend_hist.values())
 
-baseline_mix = {ch: baseline_spend[ch] / baseline_total_budget for ch in channels}
+baseline_mix = {ch: baseline_spend_hist[ch] / baseline_total_budget_hist for ch in channels}
 
-BASE_TOTAL_BUDGET = 160000
+BASE_TOTAL_BUDGET = 160000  # reference budget used for caps
 
 channel_min = {
     "Google Search": 5000,
@@ -135,7 +137,6 @@ budget = st.sidebar.number_input(
     step=5000
 )
 
-# How many future weeks is this plan for?
 weeks_horizon = st.sidebar.selectbox(
     "Plan for how many weeks?",
     [1, 2, 4],
@@ -169,6 +170,7 @@ def optimize_budget(total_budget, week, seasonality_factor):
         spend_dict = {channels[i]: spend_array[i] for i in range(len(channels))}
         return -predict_total_conversions(spend_dict, week, seasonality_factor)
 
+    # bounds scaled with budget
     bounds = [
         (channel_min[ch] * total_budget / BASE_TOTAL_BUDGET,
          channel_max[ch] * total_budget / BASE_TOTAL_BUDGET)
@@ -180,6 +182,7 @@ def optimize_budget(total_budget, week, seasonality_factor):
         "fun": lambda arr: arr.sum() - total_budget
     })
 
+    # start from historical baseline mix
     x0 = np.array([total_budget * baseline_mix[ch] for ch in channels])
 
     result = minimize(
@@ -204,7 +207,7 @@ if run_opt:
 
     st.subheader("AI-Optimized Budget Allocation")
 
-    # Internal "next week" index (user does not see this)
+    # internal "next week" index (user never sees this)
     internal_week = df["week"].max() + 1
 
     # optimized allocation for one week
@@ -212,7 +215,7 @@ if run_opt:
         budget, internal_week, seasonality_factor
     )
 
-    # baseline allocation scaled to same budget
+    # baseline allocation scaled to same weekly budget
     baseline_spend_scaled = {ch: budget * baseline_mix[ch] for ch in channels}
     base_conv_dict_one_week = predict_conversions_by_channel(
         baseline_spend_scaled, internal_week, seasonality_factor
@@ -221,7 +224,7 @@ if run_opt:
         opt_alloc, internal_week, seasonality_factor
     )
 
-    # scale by number of weeks in horizon (assuming same allocation each week)
+    # scale conversions by planning horizon
     base_total_conv = sum(base_conv_dict_one_week.values()) * weeks_horizon
     opt_total_conv = opt_conv_total_one_week * weeks_horizon
 
@@ -237,7 +240,7 @@ if run_opt:
             "baseline_spend_inr": round(baseline_spend_scaled[ch], 2),
             "optimized_spend_inr": round(opt_alloc[ch], 2),
             "baseline_conversions_per_week": round(base_conv_dict_one_week[ch], 1),
-            "optimized_conversions_per_week": round(opt_conv_dict_one_week[ch], 1),
+            "optimized_conversions_per_week": round(opt_conv_dict_one_week[ch], 1)
         })
 
     compare_df = pd.DataFrame(rows)
@@ -262,6 +265,7 @@ if run_opt:
         })
     )
 
+    # Spend chart
     st.subheader("Spend Comparison")
     spend_chart_df = compare_df.melt(
         id_vars="channel",
@@ -275,10 +279,11 @@ if run_opt:
         color="type"
     )
 
-    st.subheader("Conversions Comparison")
+    # Conversions chart (per week)
+    st.subheader("Conversions Comparison (per week)")
     conv_chart_df = compare_df.melt(
         id_vars="channel",
-        value_vars=["baseline_conversions", "optimized_conversions"],
+        value_vars=["baseline_conversions_per_week", "optimized_conversions_per_week"],
         var_name="type", value_name="conversions"
     )
     st.bar_chart(
@@ -289,5 +294,4 @@ if run_opt:
     )
 
 else:
-    st.info("Set your budget and click 'Run AI Optimization' in the sidebar.")
-
+    st.info("Set your weekly budget and planning horizon, then click 'Run AI Optimization' in the sidebar.")
